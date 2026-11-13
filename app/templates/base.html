@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}库存台账 · 时点恢复演示{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<nav>
+  <span class="brand">库存台账 · 应用层事务日志 + 时点恢复</span>
+  <a href="/" class="{{ 'active' if active == 'ledger' }}">台账</a>
+  <a href="/backup" class="{{ 'active' if active == 'backup' }}">备份与恢复</a>
+</nav>
+<div id="toast" class="toast hidden"></div>
+<main>
+{% block content %}{% endblock %}
+</main>
+<script>
+function showToast(msg, isErr) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast' + (isErr ? ' err' : '');
+  setTimeout(() => t.classList.add('hidden'), 5000);
+}
+async function postJSON(url, data) {
+  let j;
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data || {})
+    });
+    j = await r.json();
+  } catch (e) {
+    showToast('请求失败：' + e, true);
+    return null;
+  }
+  if (j.ok) {
+    sessionStorage.setItem('toast', j.message || '完成');
+    location.reload();
+  } else {
+    showToast(j.error || '操作失败', true);
+  }
+  return j;
+}
+document.addEventListener('DOMContentLoaded', () => {
+  const t = sessionStorage.getItem('toast');
+  if (t) { sessionStorage.removeItem('toast'); showToast(t); }
+});
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

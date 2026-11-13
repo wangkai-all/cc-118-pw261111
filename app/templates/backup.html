@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+{% block title %}备份与恢复 · 库存台账{% endblock %}
+{% block content %}
+<section class="card {{ 'ok' if integrity.ok else 'bad' }}">
+  <strong>当前日志链：</strong>
+  {% if integrity.ok %}
+    完整 · 最大序号 #{{ integrity.last_seq }} · 链头校验 <code>{{ integrity.head|short(16) }}…</code>
+  {% else %}
+    ⚠ {{ integrity.detail }} —— 覆盖缺口区间的恢复会停止并报错
+  {% endif %}
+</section>
+
+{% if active_restore and comparison %}
+<section class="card warn">
+  <h2>待确认的恢复 #{{ active_restore.id }}</h2>
+  <p>
+    基线：备份 #{{ active_restore.backup_id }}（序号 #{{ active_restore.backup_last_seq }}）
+    → 目标序号 #{{ active_restore.target_seq }}，已在<strong>独立暂存库</strong>中重放
+    {{ comparison.replayed }} 笔事务，当前台账尚未改动。
+  </p>
+  <h3>与当前台账对照</h3>
+  <table>
+    <thead>
+      <tr><th>仓库</th><th>货品</th><th class="num">当前数量</th><th class="num">恢复后数量</th><th class="num">差异</th></tr>
+    </thead>
+    <tbody>
+    {% for r in comparison.rows %}
+      <tr class="{{ 'diff' if r.diff != 0 }}">
+        <td>{{ r.warehouse }}</td><td>{{ r.sku }}</td>
+        <td class="num">{{ r.live_qty }}</td>
+        <td class="num">{{ r.restored_qty }}</td>
+        <td class="num">{{ '%+d'|format(r.diff) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if comparison.discarded %}
+  <h3>确认切换后将被移除的线上事务（{{ comparison.discarded|length }} 笔）</h3>
+  <table>
+    <thead><tr><th class="num">序号</th><th>内容</th><th>时间</th></tr></thead>
+    <tbody>
+    {% for r in comparison.discarded %}
+      <tr>
+        <td class="num">#{{ r.seq }}</td>
+        <td>{{ describe(r.op_type, r.payload) }}</td>
+        <td class="muted">{{ r.created_at }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  <div class="toolbar">
+    <button class="primary" onclick="confirmRestore({{ active_restore.id }})">✔ 核对无误，确认切换</button>
+    <button class="secondary" onclick="discardRestore({{ active_restore.id }})">放弃本次恢复</button>
+  </div>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>生成一致备份</h2>
+  <div class="toolbar">
+    <input id="backupNote" placeholder="备注（可选）" size="30">
+    <button class="primary" onclick="createBackup()">立即备份</button>
+  </div>
+  <p class="hint">使用 SQLite 在线备份接口生成一致快照，并明确记录快照对应的最后事务序号与链头校验值。</p>
+</section>
+
+<section class="card">
+  <h2>时点恢复（先在独立库重放，核对后切换）</h2>
+  {% if backups %}
+  <div class="toolbar">
+    <label>选择备份 <select id="backupSel" onchange="refreshTargets()"></select></label>
+    <label>恢复到 <select id="targetSel"></select></label>
+    <button class="primary" onclick="startRestore()">开始恢复</button>
+  </div>
+  <p class="hint">
+    以备份快照为基线，逐笔重放其后的操作日志直到目标序号；只重放备份之后且不超过目标的事务，
+    同一笔不会应用两次。日志断号、损坏或目标超出可恢复范围时会停止并指出缺口。
+  </p>
+  {% else %}
+  <p class="muted">还没有备份，请先在上方生成一个一致备份。</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>备份记录</h2>
+  <table>
+    <thead>
+      <tr><th class="num">ID</th><th>时间</th><th class="num">最后事务序号</th><th>链头校验</th><th>备注</th><th>快照文件</th></tr>
+    </thead>
+    <tbody>
+    {% for b in backups %}
+      <tr>
+        <td class="num">#{{ b.id }}</td>
+        <td>{{ b.created_at }}</td>
+        <td class="num">#{{ b.last_seq }}</td>
+        <td><code>{{ b.head_checksum|short(16) }}…</code></td>
+        <td>{{ b.note }}</td>
+        <td><code>{{ b.file.split('/')[-1] }}</code></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="muted">暂无备份</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>恢复记录</h2>
+  <table>
+    <thead>
+      <tr><th class="num">ID</th><th class="num">备份</th><th class="num">目标序号</th><th>状态</th><th>说明/错误</th><th>发起时间</th><th>确认时间</th></tr>
+    </thead>
+    <tbody>
+    {% for r in restores %}
+      <tr>
+        <td class="num">#{{ r.id }}</td>
+        <td class="num">#{{ r.backup_id }}</td>
+        <td class="num">#{{ r.target_seq }}</td>
+        <td><span class="badge st-{{ r.status }}">{{ status_labels.get(r.status, r.status) }}</span></td>
+        <td>{{ r.error }}</td>
+        <td class="muted">{{ r.created_at }}</td>
+        <td class="muted">{{ r.confirmed_at or '' }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="muted">暂无恢复记录</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card danger">
+  <h2>演示操作 · 故障注入</h2>
+  <div class="toolbar">
+    <button class="secondary" onclick="postJSON('/api/demo/continuous', {count: 10})">▶ 连续操作 ×10</button>
+    <button class="warnbtn" onclick="if(confirm('确定删除一条日志制造断号？')) postJSON('/api/demo/inject_gap', {})">💥 注入日志断号</button>
+    <button class="warnbtn" onclick="if(confirm('确定篡改一条日志的输入制造损坏？')) postJSON('/api/demo/inject_corruption', {})">🧨 注入日志损坏</button>
+    <button class="dangerbtn" onclick="if(confirm('将清空台账、备份与恢复记录并重新生成演示数据，确定？')) postJSON('/api/demo/reset', {})">↺ 重置演示数据</button>
+  </div>
+  <p class="hint">注入故障后，发起覆盖缺口区间的恢复会停止并指出缺口；恢复在独立库中进行，失败不影响当前台账。</p>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+const BACKUPS = {{ backups_json | safe }};
+const LOG = {{ log_json | safe }};
+
+function createBackup() {
+  postJSON('/api/backup/create', {note: document.getElementById('backupNote').value});
+}
+
+function refreshTargets() {
+  const sel = document.getElementById('backupSel');
+  const b = BACKUPS.find(x => String(x.id) === sel.value);
+  const t = document.getElementById('targetSel');
+  t.innerHTML = '';
+  if (!b) return;
+  const base = document.createElement('option');
+  base.value = b.last_seq;
+  base.textContent = `备份点 #${b.last_seq}（仅快照，不重放）`;
+  t.appendChild(base);
+  LOG.filter(e => e.seq > b.last_seq).forEach(e => {
+    const o = document.createElement('option');
+    o.value = e.seq;
+    o.textContent = `恢复到 ${e.label}`;
+    t.appendChild(o);
+  });
+  if (t.options.length > 1) t.selectedIndex = t.options.length - 1;
+}
+
+function startRestore() {
+  const backupId = document.getElementById('backupSel').value;
+  const targetSeq = document.getElementById('targetSel').value;
+  postJSON('/api/restore/start', {backup_id: Number(backupId), target_seq: Number(targetSeq)});
+}
+
+function confirmRestore(rid) {
+  if (confirm('确认用恢复结果替换当前台账？目标序号之后的事务将被移除。'))
+    postJSON('/api/restore/confirm', {restore_id: rid});
+}
+function discardRestore(rid) {
+  postJSON('/api/restore/discard', {restore_id: rid});
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const sel = document.getElementById('backupSel');
+  if (sel) {
+    BACKUPS.forEach(b => {
+      const o = document.createElement('option');
+      o.value = b.id;
+      o.textContent = `备份 #${b.id} · ${b.created_at} · 截至序号 #${b.last_seq}` + (b.note ? ` · ${b.note}` : '');
+      sel.appendChild(o);
+    });
+    refreshTargets();
+  }
+});
+</script>
+{% endblock %}

@@ -31,3 +31,6 @@ test-results/
 *.sqlite3-wal
 *.sqlite3-shm
 *.sqlite3-journal
+
+# 运行时数据（台账库、备份快照、恢复暂存）
+data/

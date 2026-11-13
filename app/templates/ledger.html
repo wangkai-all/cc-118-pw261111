@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card {{ 'ok' if integrity.ok else 'bad' }}">
+  <strong>日志链状态：</strong>
+  {% if integrity.ok %}
+    完整 · 共 {{ integrity.last_seq }} 笔事务 · 链头校验 <code>{{ integrity.head|short(16) }}…</code>
+  {% else %}
+    ⚠ {{ integrity.detail }}
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>库存台账</h2>
+  <table>
+    <thead><tr><th>仓库</th><th>货品</th><th class="num">现存数量</th></tr></thead>
+    <tbody>
+    {% for r in inventory %}
+      <tr><td>{{ r.warehouse }}</td><td>{{ r.sku }}</td><td class="num">{{ r.qty }}</td></tr>
+    {% else %}
+      <tr><td colspan="3" class="muted">暂无库存</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>业务操作</h2>
+  <div class="op-forms">
+    <form onsubmit="return submitOp(event, 'INBOUND')">
+      <h3>入库</h3>
+      <label>仓库 <select name="warehouse">{% for w in warehouses %}<option>{{ w }}</option>{% endfor %}</select></label>
+      <label>货品 <select name="sku">{% for s in skus %}<option>{{ s }}</option>{% endfor %}</select></label>
+      <label>数量 <input name="qty" type="number" min="1" value="10" required></label>
+      <button type="submit">入账</button>
+    </form>
+    <form onsubmit="return submitOp(event, 'OUTBOUND')">
+      <h3>出库</h3>
+      <label>仓库 <select name="warehouse">{% for w in warehouses %}<option>{{ w }}</option>{% endfor %}</select></label>
+      <label>货品 <select name="sku">{% for s in skus %}<option>{{ s }}</option>{% endfor %}</select></label>
+      <label>数量 <input name="qty" type="number" min="1" value="5" required></label>
+      <button type="submit">出账</button>
+    </form>
+    <form onsubmit="return submitOp(event, 'TRANSFER')">
+      <h3>调拨</h3>
+      <label>调出 <select name="from_warehouse">{% for w in warehouses %}<option>{{ w }}</option>{% endfor %}</select></label>
+      <label>调入 <select name="to_warehouse">{% for w in warehouses %}<option>{{ w }}</option>{% endfor %}</select></label>
+      <label>货品 <select name="sku">{% for s in skus %}<option>{{ s }}</option>{% endfor %}</select></label>
+      <label>数量 <input name="qty" type="number" min="1" value="5" required></label>
+      <button type="submit">调拨</button>
+    </form>
+  </div>
+  <div class="toolbar">
+    <button class="secondary" onclick="postJSON('/api/demo/continuous', {count: 10})">
+      ▶ 连续操作 ×10（演示）
+    </button>
+    <span class="muted">每笔业务变更与它的操作日志在同一事务中落库</span>
+  </div>
+</section>
+
+<section class="card">
+  <h2>业务事务日志（应用层，带序号与链式校验值）</h2>
+  <table>
+    <thead>
+      <tr><th class="num">序号</th><th>类型</th><th>完整输入</th><th>校验值</th><th>时间</th></tr>
+    </thead>
+    <tbody>
+    {% for r in log %}
+      <tr>
+        <td class="num">#{{ r.seq }}</td>
+        <td><span class="badge">{{ r.op_type|oplabel }}</span></td>
+        <td><code>{{ r.payload }}</code></td>
+        <td><code>{{ r.checksum|short(16) }}…</code></td>
+        <td class="muted">{{ r.created_at }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="muted">暂无事务</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+function submitOp(ev, type) {
+  ev.preventDefault();
+  const data = {op_type: type};
+  new FormData(ev.target).forEach((v, k) => data[k] = v);
+  postJSON('/api/op', data);
+  return false;
+}
+</script>
+{% endblock %}
